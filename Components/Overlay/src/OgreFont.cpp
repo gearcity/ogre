@@ -205,6 +205,18 @@ namespace Ogre
         return mTtfMaxBearingY;
     }
     //---------------------------------------------------------------------
+    const Font::GlyphInfo& Font::getGlyphInfo(CodePoint id) const
+    {
+        CodePointMap::const_iterator i = mCodePointMap.find(id);
+        if (i == mCodePointMap.end())
+        {
+            OGRE_EXCEPT(Exception::ERR_ITEM_NOT_FOUND, 
+                "Code point " + StringConverter::toString(id) + " not found in font "
+                + mName, "Font::getGlyphInfo");
+        }
+        return i->second;
+    }
+    //---------------------------------------------------------------------
     void Font::_setMaterial(const MaterialPtr &mat)
     {
         mMaterial = mat;
@@ -219,6 +231,8 @@ namespace Ogre
         bbs->setBillboardType(BBT_PERPENDICULAR_COMMON);
         bbs->setBillboardOrigin(BBO_CENTER_LEFT);
         bbs->setDefaultDimensions(0, 0);
+
+        float spaceWidth = mCodePointMap.find('0')->second.aspectRatio * height;
 
         text.resize(text.size() + 3); // add padding for decoder
         auto it = text.c_str();
@@ -236,6 +250,12 @@ namespace Ogre
             if(err)
                 continue;
 
+            if (cpId == ' ')
+            {
+                left += spaceWidth;
+                continue;
+            }
+
             if(cpId == '\n')
             {
                 top -= height;
@@ -243,18 +263,16 @@ namespace Ogre
                 continue;
             }
 
-            const auto& cp = getGlyphInfo(cpId);
+            auto cp = mCodePointMap.find(cpId);
+            if (cp == mCodePointMap.end())
+                continue;
 
-            left += cp.bearing * height;
+            float width = cp->second.aspectRatio * height;
+            auto bb = bbs->createBillboard(Vector3(left, top, 0), colour);
+            bb->setDimensions(width, height);
+            bb->setTexcoordRect(cp->second.uvRect);
 
-            if(!cp.uvRect.isNull())
-            {
-                auto bb = bbs->createBillboard(Vector3(left, top, 0), colour);
-                bb->setDimensions(cp.aspectRatio * height, height);
-                bb->setTexcoordRect(cp.uvRect);
-            }
-
-            left += (cp.advance - cp.bearing) * height;
+            left += width;
         }
     }
 
@@ -371,12 +389,19 @@ namespace Ogre
 
         // Convert our point size to freetype 26.6 fixed point format
         FT_F26Dot6 ftSize = (FT_F26Dot6)(mTtfSize * (1 << 6));
-        if (FT_Set_Char_Size(face, ftSize, 0, mTtfResolution * vpScale, mTtfResolution * vpScale))
-            OGRE_EXCEPT(Exception::ERR_INTERNAL_ERROR, "Could not set char size!");
+        if( FT_Set_Char_Size( face, ftSize, 0, mTtfResolution, mTtfResolution ) )
+            OGRE_EXCEPT( Exception::ERR_INTERNAL_ERROR,
+            "Could not set char size!", "Font::createTextureFromFont" );
 
         //FILE *fo_def = stdout;
 
         FT_Pos max_height = 0, max_width = 0;
+
+        // If codepoints not supplied, assume ASCII
+        if (mCodePointRangeList.empty())
+        {
+            mCodePointRangeList.push_back(CodePointRange(33, 126));
+        }
 
         // Calculate maximum width, height and bearing
         size_t glyphCount = 0;
@@ -386,9 +411,9 @@ namespace Ogre
             {
                 FT_Load_Char( face, cp, FT_LOAD_RENDER );
 
-                max_height = std::max<FT_Pos>(2 * face->glyph->bitmap.rows - (face->glyph->metrics.horiBearingY >> 6), max_height);
-                mTtfMaxBearingY = std::max(int(face->glyph->metrics.horiBearingY >> 6), mTtfMaxBearingY);
-                max_width = std::max<FT_Pos>(face->glyph->bitmap.width, max_width);
+                max_height = std::max<FT_Pos>(2 * (face->glyph->bitmap.rows << 6) - face->glyph->metrics.horiBearingY, max_height);
+                mTtfMaxBearingY = std::max(int(face->glyph->metrics.horiBearingY), mTtfMaxBearingY);
+                max_width = std::max<FT_Pos>((face->glyph->advance.x >> 6) + (face->glyph->metrics.horiBearingX >> 6), max_width);
             }
 
         }
@@ -421,7 +446,7 @@ namespace Ogre
         uint char_spacer = 1;
 
         // Now work out how big our texture needs to be
-        size_t rawSize = (max_width + char_spacer) * (max_height + char_spacer) * glyphCount;
+        size_t rawSize = (max_width + char_spacer) * ((max_height >> 6) + char_spacer) * glyphCount;
 
         uint32 tex_side = static_cast<uint32>(Math::Sqrt((Real)rawSize));
         // Now round up to nearest power of two
@@ -445,69 +470,55 @@ namespace Ogre
         // Reset content (transparent)
         img.setTo(ColourValue::ZERO);
 
-        uint32 l = 0, m = 0;
+        size_t l = 0, m = 0;
         for (const CodePointRange& range : mCodePointRangeList)
         {
             for(CodePoint cp = range.first; cp <= range.second; ++cp )
             {
-                uchar* buffer;
-                int buffer_h = 0, buffer_pitch = 0;
-#ifdef HAVE_FREETYPE
+                FT_Error ftResult;
+
                 // Load & render glyph
-                FT_Error ftResult = FT_Load_Char( face, cp, FT_LOAD_RENDER );
+                ftResult = FT_Load_Char( face, cp, FT_LOAD_RENDER );
                 if (ftResult)
                 {
                     // problem loading this glyph, continue
-                    LogManager::getSingleton().logError(
-                        StringUtil::format("Charcode %u is not in font %s", cp, mSource.c_str()));
+                    LogManager::getSingleton().logError(StringUtil::format(
+                        "Freetype could not load charcode %u in font %s", cp, mSource.c_str()));
                     continue;
                 }
 
-                buffer = face->glyph->bitmap.buffer;
-                OgreAssertDbg(buffer || (!face->glyph->bitmap.width && !face->glyph->bitmap.rows), "attempting to load NULL buffer");
+                if (!face->glyph->bitmap.buffer)
+                {
+                    // Yuck, FT didn't detect this but generated a null pointer!
+                    LogManager::getSingleton().logWarning(StringUtil::format(
+                        "Freetype did not find charcode %u in font %s", cp, mSource.c_str()));
+                    continue;
+                }
 
                 uint advance = face->glyph->advance.x >> 6;
-                uint width = face->glyph->bitmap.width;
-                buffer_pitch = face->glyph->bitmap.pitch;
-                buffer_h = face->glyph->bitmap.rows;
 
-                FT_Pos y_bearing = mTtfMaxBearingY - (face->glyph->metrics.horiBearingY >> 6);
-                FT_Pos x_bearing = face->glyph->metrics.horiBearingX >> 6;
-#else
-                int idx = stbtt_FindGlyphIndex(&font, cp);
-                if (!idx)
-                {
-                    LogManager::getSingleton().logWarning(
-                        StringUtil::format("Charcode %u is not in font %s", cp, mSource.c_str()));
-                    continue;
-                }
-
-                TRect<int> r;
-                stbtt_GetGlyphBitmapBox(&font, idx, scale, scale, &r.left, &r.top, &r.right, &r.bottom);
-
-                uint width = r.width();
-
-                int y_bearing = mTtfMaxBearingY + r.top;
-                int xoff = 0, yoff = 0;
-                buffer = stbtt_GetCodepointBitmap(&font, scale, scale, cp, &buffer_pitch, &buffer_h, &xoff, &yoff);
-
-                int advance = xoff + width, x_bearing = xoff;
-                // should be multiplied with scale, but still does not seem to do the right thing
-                // stbtt_GetGlyphHMetrics(&font, cp, &advance, &x_bearing);
-#endif
                 // If at end of row
-                if( finalWidth - 1 < l + width )
+                if( finalWidth - 1 < l + ( advance ) )
                 {
-                    m += max_height + char_spacer;
+                    m += ( max_height >> 6 ) + char_spacer;
                     l = 0;
                 }
 
-                for(int j = 0; j < buffer_h; j++ )
+                FT_Pos y_bearing = ( mTtfMaxBearingY >> 6 ) - ( face->glyph->metrics.horiBearingY >> 6 );
+                FT_Pos x_bearing = face->glyph->metrics.horiBearingX >> 6;
+
+                // x_bearing might be negative
+                uint x_offset = std::max(0, int(x_bearing));
+                // width might be larger than advance
+                uint start = x_offset - x_bearing; // case x_bearing is negative
+                uint width = std::min(face->glyph->bitmap.width - start, advance - x_offset);
+
+                for(unsigned int j = 0; j < face->glyph->bitmap.rows; j++ )
                 {
-                    uchar* pSrc = buffer + j * buffer_pitch;
-                    uint32 row = j + m + y_bearing;
-                    uchar* pDest = img.getData(l, row);
-                    for(unsigned int k = 0; k < width; k++ )
+                    uchar* pSrc = face->glyph->bitmap.buffer + j * face->glyph->bitmap.pitch + start;
+                    size_t row = j + m + y_bearing;
+                    uchar* pDest = img.getData(l + x_offset, row);
+                    for(unsigned int k = 0; k < (width); k++ )
                     {
                         if (mAntialiasColour)
                         {
@@ -525,16 +536,16 @@ namespace Ogre
                     }
                 }
 
-                UVRect uvs((Real)l / (Real)finalWidth,                   // u1
-                           (Real)m / (Real)finalHeight,                  // v1
-                           (Real)(l + width) / (Real)finalWidth,         // u2
-                           (m + max_height) / (Real)finalHeight); // v2
-                this->setGlyphInfo({cp, uvs, float(textureAspect * uvs.width() / uvs.height()),
-                                    float(x_bearing) / max_height, float(advance) / max_height});
+                this->setGlyphTexCoords(cp,
+                    (Real)l / (Real)finalWidth,  // u1
+                    (Real)m / (Real)finalHeight,  // v1
+                    (Real)( l + advance ) / (Real)finalWidth, // u2
+                    ( m + ( max_height >> 6 ) ) / (Real)finalHeight, // v2
+                    textureAspect
+                    );
 
                 // Advance a column
-                if(width)
-                    l += (width + char_spacer);
+                l += (advance + char_spacer);
             }
         }
 #ifdef HAVE_FREETYPE

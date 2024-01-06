@@ -268,7 +268,9 @@ namespace Ogre {
                     }
                     else 
                     {
+                        /*Custom OgreFont, Don't Need Overlay system.
                         len += mFont->getGlyphInfo(character).advance * mCharHeight * 2.0f * mViewportAspectCoef;
+                        */
                     }
                 }
 
@@ -321,14 +323,18 @@ namespace Ogre {
             if(uvRect.isNull())
             {
                 // Just leave a gap, no tris
+                /*Custom OgreFont, Don't Need Overlay system.
                 left += glyphInfo.advance * mCharHeight * 2.0f * mViewportAspectCoef;
+                */
                 // Also reduce tri count
                 mRenderOp.vertexData->vertexCount -= 6;
                 continue;
             }
 
+            /*Custom OgreFont, Don't Need Overlay system.
             left += glyphInfo.bearing * mCharHeight * 2 * mViewportAspectCoef;
-
+            */
+            
             // each vert is (x, y, z, u, v)
             //-------------------------------------------------------------------------------------
             // First tri
@@ -395,7 +401,9 @@ namespace Ogre {
 
             // advance
             left -= horiz_height  * mCharHeight * 2.0f;
+            /*Custom OgreFont, Don't Need Overlay system.
             left += (glyphInfo.advance  - glyphInfo.bearing) * mCharHeight * 2.0f * mViewportAspectCoef;
+            */
 
             float currentWidth = (left + 1)/2 - _getDerivedLeft();
             if (currentWidth > largestWidth)
