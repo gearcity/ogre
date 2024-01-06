@@ -80,12 +80,16 @@ Ogre::Real Widget::getCaptionWidth(const Ogre::DisplayString &caption, Ogre::Tex
         // be sure to provide a line width in the text area
         if (caption[i] == ' ')
         {
+            /*Custom OgreFont, Don't Need Overlay system.
             if (area->getSpaceWidth() != 0) lineWidth += area->getSpaceWidth();
             else lineWidth += font->getGlyphInfo(' ').advance * area->getCharHeight();
+            */
         }
         else if (caption[i] == '\n') break;
         // use glyph information to calculate line width
+        /*Custom OgreFont, Don't Need Overlay system.
         else lineWidth += font->getGlyphInfo(caption[i]).advance * area->getCharHeight();
+        */
     }
 
     return (unsigned int)lineWidth;
@@ -104,6 +108,7 @@ void Widget::fitCaptionToArea(const Ogre::DisplayString &caption, Ogre::TextArea
 
     for (unsigned int i = 0; i < s.length(); i++)
     {
+        /*Custom OgreFont, Don't Need Overlay system.
         if (s[i] == ' ' && area->getSpaceWidth() != 0) width += area->getSpaceWidth();
         else width += f->getGlyphInfo(s[i]).advance * area->getCharHeight();
         if (width > maxWidth)
@@ -111,6 +116,7 @@ void Widget::fitCaptionToArea(const Ogre::DisplayString &caption, Ogre::TextArea
             s = s.substr(0, i);
             break;
         }
+        */
     }
 
     area->setCaption(s);
@@ -246,10 +252,12 @@ void TextBox::setText(const Ogre::DisplayString &text)
     {
         if (current[i] == ' ')
         {
+            /*Custom OgreFont, Don't Need Overlay system.
             if (mTextArea->getSpaceWidth() != 0) lineWidth += mTextArea->getSpaceWidth();
             else lineWidth += font->getGlyphInfo(' ').advance * mTextArea->getCharHeight();
             firstWord = false;
             lastSpace = i;
+            */
         }
         else if (current[i] == '\n')
         {
@@ -261,7 +269,9 @@ void TextBox::setText(const Ogre::DisplayString &text)
         else
         {
             // use glyph information to calculate line width
+            /*Custom OgreFont, Don't Need Overlay system.
             lineWidth += font->getGlyphInfo(current[i]).advance * mTextArea->getCharHeight();
+            */
             if (lineWidth > rightBoundary)
             {
                 if (firstWord)
